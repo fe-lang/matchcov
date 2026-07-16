@@ -1,6 +1,6 @@
 # matchcov
 
-`matchcov` is a Rust library that decouples pattern-match coverage analysis from language implementations. Its goal is to make the usefulness algorithm described in Luc Maranget's [Warnings for pattern matching](http://moscova.inria.fr/~maranget/papers/warn/warn.pdf) reusable by Fe, solcore-rs, and other compilers that use the same approach.
+`matchcov` is a Rust library that decouples pattern-match coverage analysis from language implementations. Its goal is to make the usefulness algorithm described in Luc Maranget's [Warnings for pattern matching](http://moscova.inria.fr/~maranget/papers/warn/warn.pdf) reusable across compilers that use the same approach.
 
 This abstraction is practical. The core algorithm requires only a small semantic interface: pattern structure, constructor identity and arity, and whether a constructor family is complete. Language-specific concerns such as HIR, type inference, name resolution, source spans, diagnostic codes, and display names remain in adapters.
 
@@ -30,7 +30,7 @@ Language adapters are responsible for:
 - formatting witnesses in the target language's syntax
 - generating source spans, severities, diagnostic codes, notes, and help text
 
-This boundary keeps the coverage engine independent of both Fe's Salsa database and solcore-rs's inference context and diagnostic types.
+This boundary keeps the coverage engine independent of compiler databases, inference contexts, and diagnostic types.
 
 ## Algorithm
 
@@ -68,7 +68,7 @@ The API centers on this small data model:
 
 `MissingHead::Known` and `MissingHead::Other` distinguish a concrete missing constructor in a closed ADT from the remainder outside the previously seen heads in an open domain such as integers or strings. The latter becomes `Witness::OtherThan { excluded }`, so open domains do not need to be modeled as artificial finite sets.
 
-An arm with a guard is still checked to determine whether unconditional preceding coverage makes the arm itself unreachable. However, while the guard can fail, that arm does not contribute coverage for subsequent arms or exhaustiveness. Match arms in Fe and the current solcore-rs implementation do not have guards, so both adapters can pass `Guard::Always`.
+An arm with a guard is still checked to determine whether unconditional preceding coverage makes the arm itself unreachable. However, while the guard can fail, that arm does not contribute coverage for subsequent arms or exhaustiveness. Integrations without guarded arms can pass `Guard::Always`.
 
 ## Minimal example
 
@@ -130,13 +130,13 @@ assert!(matches!(
 
 A real adapter would display the `Ctor::True` witness as `true` in the target language and attach a non-exhaustive diagnostic to the match expression's source span.
 
-Importantly, `analyze` does not generate diagnostics. See [`docs/adapters.md`](docs/adapters.md) for examples of converting its results into compiler-native diagnostics and for migration guidance.
+Importantly, `analyze` does not generate diagnostics. Compiler integrations convert its semantic results into their native diagnostic types.
 
 ## Separating diagnostics
 
 The library returns semantic facts. For example, it reports only that arm 3 is `Unreachable(Pattern)`, that a missing witness is `Some(false)`, or that analysis ended with `Inconclusive(StepLimitExceeded { .. })`.
 
-The adapter adds source-level context to these facts. This includes the arm and match spans, whether a diagnostic is an error or a warning, its error code, qualified constructor names, abbreviated displays for multiple witnesses, and suppression in the presence of existing type errors. This separation allows Fe and solcore-rs to preserve their current diagnostic snapshots and user experience.
+The adapter adds source-level context to these facts. This includes the arm and match spans, whether a diagnostic is an error or a warning, its error code, qualified constructor names, abbreviated displays for multiple witnesses, and suppression in the presence of existing type errors. This separation lets each compiler preserve its native diagnostic behavior and user experience.
 
 ## Current scope and limitations
 
@@ -160,14 +160,3 @@ Features that require an additional constructor algebra or adapter policy:
 - determining the truth of arbitrary guard expressions
 
 Expanding range and slice patterns into large numbers of simple constructors would compromise both performance and correctness. These features should instead be designed as dedicated oracle extensions that partition interval or length spaces. For GADTs, constructor availability depends on refinements introduced by other columns, so they require an interface stronger than the current context-free `ConstructorOracle`.
-
-## Existing implementations
-
-The primary implementations examined as extraction sources are:
-
-- Fe: `../fe/crates/hir/src/analysis/ty/pattern_analysis.rs`
-- Fe pattern IR: `../fe/crates/hir/src/analysis/ty/pattern_ir.rs`
-- solcore-rs: `../solcore-rs/crates/hir-ty/src/coverage.rs`
-- solcore-rs adapter: `../solcore-rs/crates/hir-ty/src/infer/coverage_adapter.rs`
-
-See [`docs/adapters.md`](docs/adapters.md) for mappings used when migrating both implementations and guidance on where language-specific behavior should remain.
