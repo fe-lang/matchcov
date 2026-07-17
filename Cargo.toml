@@ -3,8 +3,9 @@ name = "matchcov"
 version = "0.1.0"
 edition = "2024"
 description = "Language-agnostic usefulness and exhaustiveness analysis for pattern matching"
-repository = "https://github.com/Y-Nak/matchcov"
+repository = "https://github.com/fe-lang/matchcov"
 keywords = ["compiler", "pattern-matching", "exhaustiveness"]
 categories = ["compilers"]
+license = "Apache-2.0"
 
 [dependencies]
