@@ -1,5 +1,7 @@
 # matchcov
 
+[![Crates.io](https://img.shields.io/crates/v/matchcov.svg?logo=rust)](https://crates.io/crates/matchcov)
+
 `matchcov` is a Rust library that decouples pattern-match coverage analysis from language implementations. Its goal is to make the usefulness algorithm described in Luc Maranget's [Warnings for pattern matching](http://moscova.inria.fr/~maranget/papers/warn/warn.pdf) reusable across compilers that use the same approach.
 
 This abstraction is practical. The core algorithm requires only a small semantic interface: pattern structure, constructor identity and arity, and whether a constructor family is complete. Language-specific concerns such as HIR, type inference, name resolution, source spans, diagnostic codes, and display names remain in adapters.
