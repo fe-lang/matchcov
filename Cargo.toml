@@ -2,6 +2,7 @@
 name = "matchcov"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "Language-agnostic usefulness and exhaustiveness analysis for pattern matching"
 repository = "https://github.com/fe-lang/matchcov"
 keywords = ["compiler", "pattern-matching", "exhaustiveness"]
