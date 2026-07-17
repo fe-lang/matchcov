@@ -74,13 +74,13 @@ An arm with a guard is still checked to determine whether unconditional precedin
 
 ## Minimal example
 
-The following conceptual sketch illustrates the role of the API. Consult the current signatures in [`src/lib.rs`](src/lib.rs) for exact details.
+The following example is complete and executable. A variant that also demonstrates reachability results is available in [`examples/boolean.rs`](examples/boolean.rs).
 
-```rust,ignore
+```rust
 use std::convert::Infallible;
 use matchcov::{
     analyze, Arm, ConstructorFields, ConstructorOracle, ConstructorSpace,
-    Exhaustiveness, Pattern, Witness,
+    Exhaustiveness, InputError, Pattern, Witness,
 };
 
 #[derive(Clone)]
@@ -114,20 +114,24 @@ impl ConstructorOracle<Ty, Ctor> for BoolOracle {
     }
 }
 
-let arms = vec![
-    Arm::new([Pattern::constant(Ctor::False)]),
-];
+fn main() -> Result<(), InputError> {
+    let arms = [
+        Arm::new([Pattern::constant(Ctor::False)]),
+    ];
 
-let report = analyze(&mut BoolOracle, &[Ty::Bool], &arms)?;
+    let report = analyze(&mut BoolOracle, &[Ty::Bool], &arms)?;
 
-assert!(matches!(
-    report.exhaustiveness,
-    Exhaustiveness::NonExhaustive(ref row)
-        if matches!(row.as_slice(), [Witness::Constructor {
-            head: Ctor::True,
-            arguments,
-        }] if arguments.is_empty())
-));
+    assert!(matches!(
+        report.exhaustiveness,
+        Exhaustiveness::NonExhaustive(ref row)
+            if matches!(row.as_slice(), [Witness::Constructor {
+                head: Ctor::True,
+                arguments,
+            }] if arguments.is_empty())
+    ));
+
+    Ok(())
+}
 ```
 
 A real adapter would display the `Ctor::True` witness as `true` in the target language and attach a non-exhaustive diagnostic to the match expression's source span.
@@ -136,7 +140,7 @@ Importantly, `analyze` does not generate diagnostics. Compiler integrations conv
 
 ## Separating diagnostics
 
-The library returns semantic facts. For example, it reports only that arm 3 is `Unreachable(Pattern)`, that a missing witness is `Some(false)`, or that analysis ended with `Inconclusive(StepLimitExceeded { .. })`.
+The library returns semantic facts. For example, it reports `Reachability::Unreachable(UnreachableReason::Pattern)` for an arm covered by earlier patterns, `Exhaustiveness::NonExhaustive(...)` with structured `Witness` values for a missing case, or an `InconclusiveReason::StepLimitExceeded { .. }` when a query exhausts its step budget.
 
 The adapter adds source-level context to these facts. This includes the arm and match spans, whether a diagnostic is an error or a warning, its error code, qualified constructor names, abbreviated displays for multiple witnesses, and suppression in the presence of existing type errors. This separation lets each compiler preserve its native diagnostic behavior and user experience.
 
