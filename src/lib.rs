@@ -11,9 +11,11 @@
 #![forbid(unsafe_code)]
 
 mod engine;
+mod matrix;
 mod model;
 
 pub use engine::{analyze, analyze_with_config, usefulness, usefulness_with_config};
+pub use matrix::{ColumnSignature, MatrixError, PatternMatrix, PatternRow};
 pub use model::{
     Analysis, Arm, Config, ConstructorFields, ConstructorOracle, ConstructorSpace, Exhaustiveness,
     Guard, InconclusiveReason, InputError, MissingHead, Pattern, Reachability, UnreachableReason,
