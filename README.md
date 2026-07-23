@@ -54,6 +54,9 @@ The API centers on this small data model:
   - `Wildcard`
   - `Constructor { head: C, arguments: Vec<Pattern<C>> }`
   - `Or(Vec<Pattern<C>>)`
+- `PatternMatrix<T, C, R>`: a reusable typed matrix with one `T` per column
+- `PatternRow<C, R>`: one pattern per column plus an opaque caller-defined payload `R`
+- `ColumnSignature<C>`: constructor roots observed in one column and its oracle-provided constructor space
 - `Arm<C>`: a row containing one pattern per scrutinee together with a `Guard`
 - `Guard::{Always, MayFail, Never}`: a classification of how a guard contributes to coverage, rather than the guard AST itself
 - `ConstructorOracle<T, C>`: the adapter contract that provides the constructor family and instantiated fields for a column type `T`
@@ -71,6 +74,51 @@ The API centers on this small data model:
 `MissingHead::Known` and `MissingHead::Other` distinguish a concrete missing constructor in a closed ADT from the remainder outside the previously seen heads in an open domain such as integers or strings. The latter becomes `Witness::OtherThan { excluded }`, so open domains do not need to be modeled as artificial finite sets.
 
 An arm with a guard is still checked to determine whether unconditional preceding coverage makes the arm itself unreachable. However, while the guard can fail, that arm does not contribute coverage for subsequent arms or exhaustiveness. Integrations without guarded arms can pass `Guard::Always`.
+
+### Reusable typed matrices
+
+`PatternMatrix::new` establishes the invariant that every row has exactly the same width as the matrix's column-type vector. Its operations preserve that invariant, and malformed dimensions or invalid row and column indexes return `MatrixError` rather than panicking. The row payload is never interpreted by `matchcov`; when specialization expands one row into several alternatives, each result receives a clone of the original payload.
+
+Constructor specialization replaces the selected column with the chosen constructor's field columns. It expands wildcards to field wildcards, expands matching constructor arguments, discards other constructors, and recursively expands or-patterns. Default specialization instead removes the selected column and retains only wildcard alternatives that can match the constructor-space remainder. `without_column` is different again: it removes a column without interpreting or filtering its patterns.
+
+`ConstructorSpace::Empty`, returned unchanged by `column_signature`, means that the entire selected type has no inhabitants. `ConstructorFields::Impossible` means that one particular constructor cannot inhabit the selected type; specializing it produces an empty matrix with that column removed. Rows and or-pattern alternatives are expanded in input order, and observed constructors are deduplicated in deterministic first-seen order. The oracle controls the ordering inside the `ConstructorSpace` it returns.
+
+For example, a decision-tree adapter can attach only its own arm identity to each row. Assuming the `Ty`, `Ctor`, and `BoolOracle` definitions from the complete example below:
+
+```rust
+use matchcov::{Pattern, PatternMatrix, PatternRow};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ArmId(usize);
+
+let matrix: PatternMatrix<Ty, Ctor, ArmId> = PatternMatrix::new(
+    [Ty::Bool],
+    [
+        PatternRow::new([Pattern::constant(Ctor::False)], ArmId(0)),
+        PatternRow::new(
+            [Pattern::or([
+                Pattern::Wildcard,
+                Pattern::constant(Ctor::True),
+            ])],
+            ArmId(1),
+        ),
+    ],
+)
+.expect("row widths match the typed columns");
+
+let true_branch = matrix
+    .specialize(&mut BoolOracle, 0, &Ctor::True)
+    .expect("the constructor metadata is valid");
+let arm_ids = true_branch
+    .rows()
+    .iter()
+    .map(|row| row.payload().0)
+    .collect::<Vec<_>>();
+
+assert_eq!(arm_ids, vec![1, 1]);
+```
+
+The first row is discarded because it names a different constructor. Both alternatives in the second row match the `True` branch, so they remain in alternative order with the same opaque `ArmId`.
 
 ## Minimal example
 
