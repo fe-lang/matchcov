@@ -137,7 +137,7 @@ impl<C: Clone + Eq> ConstructorSpace<C> {
     }
 }
 
-/// A constructor head known to be absent from the matrix's first column.
+/// A constructor head known to be absent from the queried matrix column.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MissingHead<C> {
     /// A concrete, inhabited constructor that is not in `seen`.

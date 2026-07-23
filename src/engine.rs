@@ -433,31 +433,16 @@ fn specialize_head<C, E>(
 where
     C: Clone + Eq,
 {
-    match pattern {
-        Pattern::Wildcard => {
-            let mut row = vec![Pattern::Wildcard; field_count];
-            row.extend_from_slice(rest);
-            output.push(row);
+    let mut emit = |mut row: Vec<Pattern<C>>| {
+        row.extend_from_slice(rest);
+        output.push(row);
+    };
+    specialize_pattern(pattern, constructor, field_count, &mut emit).map_err(|mismatch| {
+        InconclusiveReason::ArityMismatch {
+            expected: mismatch.expected,
+            actual: mismatch.actual,
         }
-        Pattern::Constructor { head, arguments } if head == constructor => {
-            if arguments.len() != field_count {
-                return Err(InconclusiveReason::ArityMismatch {
-                    expected: field_count,
-                    actual: arguments.len(),
-                });
-            }
-            let mut row = arguments.clone();
-            row.extend_from_slice(rest);
-            output.push(row);
-        }
-        Pattern::Constructor { .. } => {}
-        Pattern::Or(alternatives) => {
-            for alternative in alternatives {
-                specialize_head(alternative, rest, constructor, field_count, output)?;
-            }
-        }
-    }
-    Ok(())
+    })
 }
 
 fn default_matrix<C: Clone>(matrix: &[Vec<Pattern<C>>]) -> Vec<Vec<Pattern<C>>> {
@@ -476,15 +461,7 @@ fn default_head<C: Clone>(
     rest: &[Pattern<C>],
     output: &mut Vec<Vec<Pattern<C>>>,
 ) {
-    match pattern {
-        Pattern::Wildcard => output.push(rest.to_vec()),
-        Pattern::Constructor { .. } => {}
-        Pattern::Or(alternatives) => {
-            for alternative in alternatives {
-                default_head(alternative, rest, output);
-            }
-        }
-    }
+    expand_default_pattern(pattern, &mut || output.push(rest.to_vec()));
 }
 
 fn root_constructors<C: Clone + Eq>(matrix: &[Vec<Pattern<C>>]) -> Vec<C> {
@@ -495,22 +472,6 @@ fn root_constructors<C: Clone + Eq>(matrix: &[Vec<Pattern<C>>]) -> Vec<C> {
         }
     }
     result
-}
-
-fn collect_root_constructors<C: Clone + Eq>(pattern: &Pattern<C>, output: &mut Vec<C>) {
-    match pattern {
-        Pattern::Wildcard => {}
-        Pattern::Constructor { head, .. } => {
-            if !output.contains(head) {
-                output.push(head.clone());
-            }
-        }
-        Pattern::Or(alternatives) => {
-            for alternative in alternatives {
-                collect_root_constructors(alternative, output);
-            }
-        }
-    }
 }
 
 fn deduplicate<C: Eq>(constructors: Vec<C>) -> Vec<C> {
@@ -549,6 +510,74 @@ fn recompose_constructor<C, E>(
 fn prepend<C>(head: Witness<C>, mut rest: Vec<Witness<C>>) -> Vec<Witness<C>> {
     rest.insert(0, head);
     rest
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ArityMismatch {
+    pub(crate) expected: usize,
+    pub(crate) actual: usize,
+}
+
+pub(crate) fn specialize_pattern<C, F>(
+    pattern: &Pattern<C>,
+    constructor: &C,
+    field_count: usize,
+    emit: &mut F,
+) -> Result<(), ArityMismatch>
+where
+    C: Clone + Eq,
+    F: FnMut(Vec<Pattern<C>>),
+{
+    match pattern {
+        Pattern::Wildcard => emit(vec![Pattern::Wildcard; field_count]),
+        Pattern::Constructor { head, arguments } if head == constructor => {
+            if arguments.len() != field_count {
+                return Err(ArityMismatch {
+                    expected: field_count,
+                    actual: arguments.len(),
+                });
+            }
+            emit(arguments.clone());
+        }
+        Pattern::Constructor { .. } => {}
+        Pattern::Or(alternatives) => {
+            for alternative in alternatives {
+                specialize_pattern(alternative, constructor, field_count, emit)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn expand_default_pattern<C, F>(pattern: &Pattern<C>, emit: &mut F)
+where
+    F: FnMut(),
+{
+    match pattern {
+        Pattern::Wildcard => emit(),
+        Pattern::Constructor { .. } => {}
+        Pattern::Or(alternatives) => {
+            for alternative in alternatives {
+                expand_default_pattern(alternative, emit);
+            }
+        }
+    }
+}
+
+pub(crate) fn collect_root_constructors<C: Clone + Eq>(pattern: &Pattern<C>, output: &mut Vec<C>) {
+    match pattern {
+        Pattern::Wildcard => {}
+        Pattern::Constructor { head, .. } => {
+            if !output.contains(head) {
+                output.push(head.clone());
+            }
+        }
+        Pattern::Or(alternatives) => {
+            for alternative in alternatives {
+                collect_root_constructors(alternative, output);
+            }
+        }
+    }
 }
 
 struct Budget {
