@@ -441,3 +441,99 @@ fn an_uninhabited_known_missing_head_is_inconsistent_even_without_observed_heads
         Usefulness::Inconclusive(InconclusiveReason::InconsistentOracle)
     );
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NatTy {
+    Nat,
+    Bool,
+    Stream,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NatHead {
+    Succ,
+    Zero,
+    False,
+    True,
+    Cons,
+}
+
+/// `Nat = Succ(Nat) | Zero`, with the recursive head first, and
+/// `Stream = Cons(Stream)`, which the oracle wrongly calls inhabited.
+struct NatOracle;
+
+impl ConstructorOracle<NatTy, NatHead> for NatOracle {
+    type Error = Infallible;
+
+    fn constructor_space(
+        &mut self,
+        ty: &NatTy,
+        seen: &[NatHead],
+    ) -> Result<ConstructorSpace<NatHead>, Self::Error> {
+        Ok(match ty {
+            NatTy::Nat => ConstructorSpace::from_finite(seen, [NatHead::Succ, NatHead::Zero]),
+            NatTy::Bool => ConstructorSpace::from_finite(seen, [NatHead::False, NatHead::True]),
+            NatTy::Stream => ConstructorSpace::from_finite(seen, [NatHead::Cons]),
+        })
+    }
+
+    fn constructor_fields(
+        &mut self,
+        _ty: &NatTy,
+        constructor: &NatHead,
+    ) -> Result<ConstructorFields<NatTy>, Self::Error> {
+        Ok(ConstructorFields::Fields(match constructor {
+            NatHead::Succ => vec![NatTy::Nat],
+            NatHead::Cons => vec![NatTy::Stream],
+            NatHead::Zero | NatHead::False | NatHead::True => Vec::new(),
+        }))
+    }
+}
+
+#[test]
+fn a_recursive_missing_head_named_first_is_shown_inhabited_through_another() {
+    let nat_and_bool = [NatTy::Nat, NatTy::Bool];
+    let missing = |first: Pattern<NatHead>| {
+        analyze(
+            &mut NatOracle,
+            &nat_and_bool,
+            &[Arm::new([first, Pattern::constant(NatHead::False)])],
+        )
+        .unwrap()
+        .exhaustiveness
+    };
+
+    assert_eq!(
+        missing(Pattern::Wildcard),
+        Exhaustiveness::NonExhaustive(vec![
+            Witness::Wildcard,
+            Witness::Constructor {
+                head: NatHead::True,
+                arguments: Vec::new(),
+            },
+        ])
+    );
+    assert_eq!(
+        missing(Pattern::constant(NatHead::Zero)),
+        Exhaustiveness::NonExhaustive(vec![
+            Witness::Constructor {
+                head: NatHead::Succ,
+                arguments: vec![Witness::Wildcard],
+            },
+            Witness::Wildcard,
+        ])
+    );
+}
+
+#[test]
+fn a_head_that_only_recurses_stays_inconclusive() {
+    let result = usefulness(&mut NatOracle, &[NatTy::Stream], &[], &[Pattern::Wildcard]).unwrap();
+
+    assert!(matches!(
+        result,
+        Usefulness::Inconclusive(
+            InconclusiveReason::StepLimitExceeded { .. }
+                | InconclusiveReason::DepthLimitExceeded { .. }
+        )
+    ));
+}
