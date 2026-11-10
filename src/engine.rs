@@ -16,7 +16,7 @@ pub fn analyze<T, C, O>(
     arms: &[Arm<C>],
 ) -> Result<Analysis<C, O::Error>, InputError>
 where
-    T: Clone,
+    T: Clone + Eq,
     C: Clone + Eq,
     O: ConstructorOracle<T, C>,
 {
@@ -31,7 +31,7 @@ pub fn analyze_with_config<T, C, O>(
     config: Config,
 ) -> Result<Analysis<C, O::Error>, InputError>
 where
-    T: Clone,
+    T: Clone + Eq,
     C: Clone + Eq,
     O: ConstructorOracle<T, C>,
 {
@@ -87,7 +87,7 @@ pub fn usefulness<T, C, O>(
     query: &[Pattern<C>],
 ) -> Result<Usefulness<C, O::Error>, InputError>
 where
-    T: Clone,
+    T: Clone + Eq,
     C: Clone + Eq,
     O: ConstructorOracle<T, C>,
 {
@@ -103,7 +103,7 @@ pub fn usefulness_with_config<T, C, O>(
     config: Config,
 ) -> Result<Usefulness<C, O::Error>, InputError>
 where
-    T: Clone,
+    T: Clone + Eq,
     C: Clone + Eq,
     O: ConstructorOracle<T, C>,
 {
@@ -148,7 +148,7 @@ fn usefulness_unchecked<T, C, O>(
     config: Config,
 ) -> Usefulness<C, O::Error>
 where
-    T: Clone,
+    T: Clone + Eq,
     C: Clone + Eq,
     O: ConstructorOracle<T, C>,
 {
@@ -165,7 +165,7 @@ fn usefulness_rec<T, C, O>(
     depth: usize,
 ) -> Usefulness<C, O::Error>
 where
-    T: Clone,
+    T: Clone + Eq,
     C: Clone + Eq,
     O: ConstructorOracle<T, C>,
 {
@@ -267,7 +267,7 @@ fn usefulness_wildcard<T, C, O>(
     depth: usize,
 ) -> Usefulness<C, O::Error>
 where
-    T: Clone,
+    T: Clone + Eq,
     C: Clone + Eq,
     O: ConstructorOracle<T, C>,
 {
@@ -368,7 +368,7 @@ where
                             return Usefulness::Inconclusive(InconclusiveReason::Oracle(error));
                         }
                     };
-                    match inhabited(oracle, &field_types, budget, depth + 1) {
+                    match inhabited(oracle, &field_types, &mut Vec::new(), budget, depth + 1) {
                         Ok(true) => {}
                         Ok(false) => {
                             return Usefulness::Inconclusive(
@@ -396,120 +396,62 @@ where
     }
 }
 
-/// What a bounded search shows of whether types have values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Inhabitation {
-    /// Every type has a value.
-    Yes,
-    /// Some type has none.
-    No,
-    /// Showing it needs constructors nested deeper than the bound.
-    Deeper,
-}
-
-/// Whether each of `types` has a value. The search goes one constructor level
-/// deeper at a time, trying the oracle's missing heads in turn at each level,
-/// so a recursive head the oracle names first, like `Succ` of
-/// `Succ(Nat) | Zero`, gives way to one that ends, like `Zero`.
+/// Whether each of `types` has a value. The missing heads the oracle names
+/// for a type are tried in turn until the fields of one have values.
+/// `visiting` holds the types whose heads are being tried: a smallest value
+/// of a type holds no other value of that type, so a head with a field of
+/// such a type is passed over, as `Succ` of `Succ(Nat) | Zero` is for `Zero`.
 fn inhabited<T, C, O>(
     oracle: &mut O,
     types: &[T],
+    visiting: &mut Vec<T>,
     budget: &mut Budget,
     depth: usize,
 ) -> Result<bool, InconclusiveReason<O::Error>>
 where
-    T: Clone,
+    T: Clone + Eq,
     C: Clone + Eq,
     O: ConstructorOracle<T, C>,
 {
-    for bound in 0.. {
-        match inhabited_within(oracle, types, bound, budget, depth)? {
-            Inhabitation::Yes => return Ok(true),
-            Inhabitation::No => return Ok(false),
-            Inhabitation::Deeper => {}
-        }
-    }
-    unreachable!("the budget ends the search")
-}
-
-/// Whether each of `types` has a value of constructors nested at most `bound`
-/// deep. A missing head the oracle names must have one: fields without a
-/// value contradict it.
-fn inhabited_within<T, C, O>(
-    oracle: &mut O,
-    types: &[T],
-    bound: usize,
-    budget: &mut Budget,
-    depth: usize,
-) -> Result<Inhabitation, InconclusiveReason<O::Error>>
-where
-    T: Clone,
-    C: Clone + Eq,
-    O: ConstructorOracle<T, C>,
-{
-    let mut result = Inhabitation::Yes;
     for ty in types {
-        budget.enter(depth)?;
+        if visiting.contains(ty) {
+            return Ok(false);
+        }
+        visiting.push(ty.clone());
         let mut tried = Vec::new();
         let found = loop {
-            match oracle
+            budget.enter(depth)?;
+            let head = match oracle
                 .constructor_space(ty, &tried)
                 .map_err(InconclusiveReason::Oracle)?
             {
-                ConstructorSpace::Empty => break Inhabitation::No,
+                ConstructorSpace::Empty | ConstructorSpace::Complete { .. } => break false,
                 ConstructorSpace::Incomplete {
                     missing: MissingHead::Other,
-                } => break Inhabitation::Yes,
-                // Every head the oracle names was tried and needs more depth.
-                ConstructorSpace::Complete { constructors } => {
-                    if constructors.iter().any(|head| !tried.contains(head))
-                        || tried.iter().any(|head| !constructors.contains(head))
-                    {
-                        return Err(InconclusiveReason::InconsistentOracle);
-                    }
-                    break if tried.is_empty() {
-                        Inhabitation::No
-                    } else {
-                        Inhabitation::Deeper
-                    };
-                }
+                } => break true,
                 ConstructorSpace::Incomplete {
                     missing: MissingHead::Known(head),
-                } => {
-                    if tried.contains(&head) {
-                        return Err(InconclusiveReason::InconsistentOracle);
-                    }
-                    let fields = match oracle
-                        .constructor_fields(ty, &head)
-                        .map_err(InconclusiveReason::Oracle)?
-                    {
-                        ConstructorFields::Fields(fields) => fields,
-                        ConstructorFields::Impossible => {
-                            return Err(InconclusiveReason::InconsistentOracle);
-                        }
-                    };
-                    let fields = if fields.is_empty() {
-                        Inhabitation::Yes
-                    } else if bound == 0 {
-                        Inhabitation::Deeper
-                    } else {
-                        inhabited_within(oracle, &fields, bound - 1, budget, depth + 1)?
-                    };
-                    match fields {
-                        Inhabitation::Yes => break Inhabitation::Yes,
-                        Inhabitation::No => return Err(InconclusiveReason::InconsistentOracle),
-                        Inhabitation::Deeper => tried.push(head),
-                    }
-                }
+                } => head,
+            };
+            let fields = match oracle
+                .constructor_fields(ty, &head)
+                .map_err(InconclusiveReason::Oracle)?
+            {
+                ConstructorFields::Fields(fields) if !tried.contains(&head) => fields,
+                // A missing head is neither one already tried nor impossible.
+                _ => return Err(InconclusiveReason::InconsistentOracle),
+            };
+            if inhabited(oracle, &fields, visiting, budget, depth + 1)? {
+                break true;
             }
+            tried.push(head);
         };
-        match found {
-            Inhabitation::Yes => {}
-            Inhabitation::No => return Ok(Inhabitation::No),
-            Inhabitation::Deeper => result = Inhabitation::Deeper,
+        visiting.pop();
+        if !found {
+            return Ok(false);
         }
     }
-    Ok(result)
+    Ok(true)
 }
 
 fn specialize_matrix<C, E>(

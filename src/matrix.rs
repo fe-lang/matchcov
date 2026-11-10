@@ -289,7 +289,7 @@ impl<T, C, R> PatternMatrix<T, C, R> {
         row: usize,
     ) -> Result<Usefulness<C, O::Error>, MatrixError<O::Error>>
     where
-        T: Clone,
+        T: Clone + Eq,
         C: Clone + Eq,
         O: ConstructorOracle<T, C>,
     {

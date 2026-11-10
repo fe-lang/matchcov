@@ -41,7 +41,7 @@ Each match arm is represented as a row of patterns, with one column per scrutine
 1. If the first column of `q` contains a constructor pattern, specialize `P` and `q` for that constructor, insert the constructor arguments as new columns, and recurse.
 2. If the first column is a wildcard and the constructors already present completely cover the type's constructor space, inspect every constructor branch. Otherwise, inspect the default matrix.
 3. An or-pattern is useful if any of its alternatives is useful.
-4. Even for a query against an empty matrix, the oracle checks whether each column, including constructor fields, has an inhabitant before constructing a witness. This prevents an empty type from being incorrectly reported as non-exhaustive. The check searches one constructor level deeper at a time and tries each missing head the oracle names, so a recursive head named first, like `Succ` of `Succ(Nat) | Zero`, gives way to one that ends. Once all columns have been consumed, the query is useful if there is no empty row; an empty row means the query is already covered.
+4. Even for a query against an empty matrix, the oracle checks whether each column, including constructor fields, has an inhabitant before constructing a witness. This prevents an empty type from being incorrectly reported as non-exhaustive. For a field's type, the check tries each missing head the oracle names until the fields of one have values, and passes over a head with a field of a type it is already checking, so a recursive head named first, like `Succ` of `Succ(Nat) | Zero`, gives way to one that ends. It compares types to do so: types that compare equal must have the same constructors. Once all columns have been consumed, the query is useful if there is no empty row; an empty row means the query is already covered.
 5. Arm `i` is unreachable only if it is proved useless relative to the coverage of all preceding arms. A match is non-exhaustive if a wildcard row is useful after all arms have been added.
 
 The implementation does not return only a boolean. It returns `Inconclusive` when the recursion budget is exhausted, constructor metadata is inconsistent, arities do not match, or similar issues arise. Adapters can therefore avoid false-positive diagnostics.
@@ -131,7 +131,7 @@ use matchcov::{
     Exhaustiveness, InputError, Pattern, Witness,
 };
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 enum Ty { Bool }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
