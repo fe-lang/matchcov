@@ -206,7 +206,7 @@ fn constructor_specialization_expands_root_or_patterns_in_stable_order() {
                     pair(constant(Head::False), constant(Head::True)),
                     Pattern::or([
                         constant(Head::Other),
-                        Pattern::Wildcard,
+                        pair(Pattern::Wildcard, constant(Head::False)),
                         pair(constant(Head::True), constant(Head::False)),
                     ]),
                 ])],
@@ -230,7 +230,7 @@ fn constructor_specialization_expands_root_or_patterns_in_stable_order() {
             [Ty::Bool, Ty::Bool],
             [
                 row([constant(Head::False), constant(Head::True)], 1),
-                row([Pattern::Wildcard, Pattern::Wildcard], 1),
+                row([Pattern::Wildcard, constant(Head::False)], 1),
                 row([constant(Head::True), constant(Head::False)], 1),
                 row(
                     [
@@ -245,7 +245,50 @@ fn constructor_specialization_expands_root_or_patterns_in_stable_order() {
 }
 
 #[test]
-fn default_specialization_filters_and_expands_a_nonzero_column_in_order() {
+fn constructor_specialization_gives_one_wildcard_row_for_alternatives_that_cover_it() {
+    let input = matrix(
+        [pair_ty(Ty::Bool, Ty::Bool)],
+        [
+            row(
+                [Pattern::or([
+                    pair(constant(Head::True), Pattern::Wildcard),
+                    pair(
+                        Pattern::Wildcard,
+                        Pattern::or([constant(Head::False), Pattern::Wildcard]),
+                    ),
+                    pair(constant(Head::False), constant(Head::False)),
+                ])],
+                0,
+            ),
+            row([Pattern::or([Pattern::Wildcard, Pattern::Wildcard])], 1),
+            row(
+                [Pattern::or([
+                    pair(constant(Head::True), Pattern::Wildcard),
+                    pair(constant(Head::False), constant(Head::False)),
+                ])],
+                2,
+            ),
+        ],
+    );
+
+    let specialized = input.specialize(&mut Oracle, 0, &Head::Pair).unwrap();
+
+    assert_eq!(
+        specialized,
+        matrix(
+            [Ty::Bool, Ty::Bool],
+            [
+                row([Pattern::Wildcard, Pattern::Wildcard], 0),
+                row([Pattern::Wildcard, Pattern::Wildcard], 1),
+                row([constant(Head::True), Pattern::Wildcard], 2),
+                row([constant(Head::False), constant(Head::False)], 2),
+            ],
+        )
+    );
+}
+
+#[test]
+fn default_specialization_filters_a_nonzero_column_and_keeps_or_rows_once() {
     let input = matrix(
         [Ty::Word, Ty::Bool, Ty::Word],
         [
@@ -288,7 +331,6 @@ fn default_specialization_filters_and_expands_a_nonzero_column_in_order() {
             [Ty::Word, Ty::Word],
             [
                 row([constant(Head::Word(1)), constant(Head::Word(11))], 1,),
-                row([constant(Head::Word(2)), constant(Head::Word(12))], 2,),
                 row([constant(Head::Word(2)), constant(Head::Word(12))], 2,),
             ],
         )

@@ -122,9 +122,11 @@ impl<T, C, R> PatternMatrix<T, C, R> {
     /// The selected type and pattern are replaced in place by the constructor's
     /// field types and field patterns. Wildcards expand to field wildcards,
     /// matching constructors expand to their arguments, other constructors are
-    /// discarded, and or-patterns expand recursively from left to right. Input
-    /// row order is preserved, and every expanded row receives a clone of its
-    /// original payload.
+    /// discarded, and or-patterns expand recursively from left to right. When
+    /// one alternative of a row specializes to patterns that match anything,
+    /// the row specializes to one row of wildcards instead, which matches what
+    /// all its alternatives do. Input row order is preserved, and every
+    /// expanded row receives a clone of its original payload.
     ///
     /// An impossible constructor denotes an empty branch. In that case this
     /// returns a matrix with no rows and with the selected column removed; there
@@ -158,20 +160,23 @@ impl<T, C, R> PatternMatrix<T, C, R> {
 
         let mut rows = Vec::new();
         for row in &self.rows {
-            let selected = &row.patterns[column];
-            let mut emit = |replacement: Vec<Pattern<C>>| {
+            let replacements = engine::specialize_alternatives(
+                &row.patterns[column],
+                constructor,
+                field_types.len(),
+            )
+            .map_err(|mismatch| MatrixError::ArityMismatch {
+                expected: mismatch.expected,
+                actual: mismatch.actual,
+            })?;
+            for replacement in replacements {
                 let mut patterns =
                     Vec::with_capacity(row.patterns.len().saturating_sub(1) + replacement.len());
                 patterns.extend_from_slice(&row.patterns[..column]);
                 patterns.extend(replacement);
                 patterns.extend_from_slice(&row.patterns[column + 1..]);
                 rows.push(PatternRow::new(patterns, row.payload.clone()));
-            };
-            engine::specialize_pattern(selected, constructor, field_types.len(), &mut emit)
-                .map_err(|mismatch| MatrixError::ArityMismatch {
-                    expected: mismatch.expected,
-                    actual: mismatch.actual,
-                })?;
+            }
         }
 
         Ok(Self {
@@ -182,10 +187,10 @@ impl<T, C, R> PatternMatrix<T, C, R> {
 
     /// Removes an arbitrary column and keeps only its default-matching rows.
     ///
-    /// Wildcards match the default case, constructors do not, and or-patterns
-    /// are recursively expanded from left to right. This differs from
-    /// [`without_column`](Self::without_column), which retains every row without
-    /// interpreting its selected pattern.
+    /// Wildcards match the default case and constructors do not. A row whose
+    /// or-pattern has a wildcard alternative, at any depth, is kept once. This
+    /// differs from [`without_column`](Self::without_column), which retains
+    /// every row without interpreting its selected pattern.
     pub fn specialize_default(&self, column: usize) -> Result<Self, MatrixError<Infallible>>
     where
         T: Clone,
@@ -196,14 +201,12 @@ impl<T, C, R> PatternMatrix<T, C, R> {
 
         let mut rows = Vec::new();
         for row in &self.rows {
-            let selected = &row.patterns[column];
-            let mut emit = || {
+            if engine::matches_anything(&row.patterns[column]) {
                 rows.push(PatternRow::new(
                     remove_item(&row.patterns, column),
                     row.payload.clone(),
                 ));
-            };
-            engine::expand_default_pattern(selected, &mut emit);
+            }
         }
 
         Ok(Self {

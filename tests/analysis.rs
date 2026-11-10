@@ -557,3 +557,40 @@ fn usefulness_matches_brute_force_for_small_boolean_matrices() {
         }
     }
 }
+
+#[test]
+fn alternatives_that_cover_a_constructor_add_no_rows() {
+    // Each of these columns used to double the rows of every matrix below it.
+    const COLUMNS: usize = 64;
+    let bools = Ty::Pair(Box::new(Ty::Bool), Box::new(Ty::Bool));
+    let shapes = [
+        (
+            Ty::Word,
+            Pattern::or([Pattern::Wildcard, Pattern::Wildcard]),
+        ),
+        (
+            bools.clone(),
+            Pattern::or([
+                pair(Pattern::Wildcard, Pattern::Wildcard),
+                pair(Pattern::Wildcard, Pattern::Wildcard),
+            ]),
+        ),
+        (
+            bools,
+            Pattern::or([
+                pair(constant(Ctor::True), Pattern::Wildcard),
+                pair(Pattern::Wildcard, Pattern::Wildcard),
+            ]),
+        ),
+    ];
+    for (ty, pattern) in shapes {
+        let analysis = analyze(
+            &mut TestOracle,
+            &vec![ty; COLUMNS],
+            &[Arm::new(vec![pattern; COLUMNS])],
+        )
+        .unwrap();
+        assert_eq!(analysis.arms, vec![Reachability::Reachable]);
+        assert_eq!(analysis.exhaustiveness, Exhaustiveness::Exhaustive);
+    }
+}

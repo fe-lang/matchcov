@@ -472,6 +472,7 @@ fn an_uninhabited_head_of_a_field_type_gives_way_to_an_inhabited_one() {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum NatTy {
+    Wrap,
     Nat,
     Bool,
     Stream,
@@ -479,6 +480,7 @@ enum NatTy {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum NatHead {
+    Wrap,
     Succ,
     Zero,
     False,
@@ -486,7 +488,7 @@ enum NatHead {
     Cons,
 }
 
-/// `Nat = Succ(Nat) | Zero`, with the recursive head first, and
+/// `Nat = Succ(Nat) | Zero`, with the recursive head first, `Wrap(Nat)`, and
 /// `Stream = Cons(Stream)`, which the oracle wrongly calls inhabited.
 struct NatOracle;
 
@@ -499,6 +501,7 @@ impl ConstructorOracle<NatTy, NatHead> for NatOracle {
         seen: &[NatHead],
     ) -> Result<ConstructorSpace<NatHead>, Self::Error> {
         Ok(match ty {
+            NatTy::Wrap => ConstructorSpace::from_finite(seen, [NatHead::Wrap]),
             NatTy::Nat => ConstructorSpace::from_finite(seen, [NatHead::Succ, NatHead::Zero]),
             NatTy::Bool => ConstructorSpace::from_finite(seen, [NatHead::False, NatHead::True]),
             NatTy::Stream => ConstructorSpace::from_finite(seen, [NatHead::Cons]),
@@ -511,7 +514,7 @@ impl ConstructorOracle<NatTy, NatHead> for NatOracle {
         constructor: &NatHead,
     ) -> Result<ConstructorFields<NatTy>, Self::Error> {
         Ok(ConstructorFields::Fields(match constructor {
-            NatHead::Succ => vec![NatTy::Nat],
+            NatHead::Wrap | NatHead::Succ => vec![NatTy::Nat],
             NatHead::Cons => vec![NatTy::Stream],
             NatHead::Zero | NatHead::False | NatHead::True => Vec::new(),
         }))
@@ -719,5 +722,35 @@ fn field_types_that_never_repeat_run_out_of_depth() {
         Usefulness::Inconclusive(InconclusiveReason::DepthLimitExceeded {
             max_depth: Config::default().max_depth,
         })
+    );
+}
+
+#[test]
+fn a_field_whose_alternatives_cover_it_still_finds_a_missing_value() {
+    // Specializing `Wrap` gives one wildcard row for `Succ(Zero) | _`, so no
+    // row names `Succ` and the missing head is the recursive one.
+    let succ_zero = Pattern::constructor(NatHead::Succ, [Pattern::constant(NatHead::Zero)]);
+    let analysis = analyze(
+        &mut NatOracle,
+        &[NatTy::Wrap, NatTy::Bool],
+        &[Arm::new([
+            Pattern::constructor(NatHead::Wrap, [Pattern::or([succ_zero, Pattern::Wildcard])]),
+            Pattern::constant(NatHead::False),
+        ])],
+    )
+    .unwrap();
+
+    assert_eq!(
+        analysis.exhaustiveness,
+        Exhaustiveness::NonExhaustive(vec![
+            Witness::Constructor {
+                head: NatHead::Wrap,
+                arguments: vec![Witness::Wildcard],
+            },
+            Witness::Constructor {
+                head: NatHead::True,
+                arguments: Vec::new(),
+            },
+        ])
     );
 }

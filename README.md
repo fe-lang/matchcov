@@ -79,7 +79,7 @@ An arm with a guard is still checked to determine whether unconditional precedin
 
 `PatternMatrix::new` establishes the invariant that every row has exactly the same width as the matrix's column-type vector. Its operations preserve that invariant, and malformed dimensions or invalid row and column indexes return `MatrixError` rather than panicking. The row payload is never interpreted by `matchcov`; when specialization expands one row into several alternatives, each result receives a clone of the original payload.
 
-Constructor specialization replaces the selected column with the chosen constructor's field columns. It expands wildcards to field wildcards, expands matching constructor arguments, discards other constructors, and recursively expands or-patterns. Default specialization instead removes the selected column and retains only wildcard alternatives that can match the constructor-space remainder. `without_column` is different again: it removes a column without interpreting or filtering its patterns.
+Constructor specialization replaces the selected column with the chosen constructor's field columns. It expands wildcards to field wildcards, expands matching constructor arguments, discards other constructors, and recursively expands or-patterns; when one alternative of a row specializes to patterns that match anything, the row gives a single row of wildcards, which matches what all its alternatives do. Default specialization instead removes the selected column and keeps a row once if its pattern, or one of its alternatives, is a wildcard that can match the constructor-space remainder. Either way, an or-pattern column such as `_ | _` doesn't double the rows below it. `without_column` is different again: it removes a column without interpreting or filtering its patterns.
 
 `ConstructorSpace::Empty`, returned unchanged by `column_signature`, means that the entire selected type has no inhabitants. `ConstructorFields::Impossible` means that one particular constructor cannot inhabit the selected type; specializing it produces an empty matrix with that column removed. Rows and or-pattern alternatives are expanded in input order, and observed constructors are deduplicated in deterministic first-seen order. The oracle controls the ordering inside the `ConstructorSpace` it returns.
 
@@ -115,10 +115,10 @@ let arm_ids = true_branch
     .map(|row| row.payload().0)
     .collect::<Vec<_>>();
 
-assert_eq!(arm_ids, vec![1, 1]);
+assert_eq!(arm_ids, vec![1]);
 ```
 
-The first row is discarded because it names a different constructor. Both alternatives in the second row match the `True` branch, so they remain in alternative order with the same opaque `ArmId`.
+The first row is discarded because it names a different constructor. Both alternatives in the second row match the `True` branch, and one of them matches anything there, so the branch has that row once, with its opaque `ArmId`.
 
 ## Minimal example
 
