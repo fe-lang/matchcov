@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use matchcov::{
     Arm, Config, ConstructorFields, ConstructorOracle, ConstructorSpace, Exhaustiveness,
     InconclusiveReason, MissingHead, Pattern, Reachability, UnreachableReason, Usefulness, Witness,
-    analyze, analyze_with_config, usefulness,
+    analyze, analyze_with_config, usefulness, usefulness_with_config,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -283,6 +283,8 @@ fn an_explicit_impossible_constructor_is_useless() {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum UninhabitedTy {
     Root,
+    Outer,
+    Inner,
     Empty,
 }
 
@@ -290,8 +292,12 @@ enum UninhabitedTy {
 enum UninhabitedHead {
     Live,
     Dead,
+    Wrap,
 }
 
+/// `Root` and `Inner` are `Dead(Empty) | Live`, where the oracle wrongly
+/// calls `Dead` inhabited, and `Root` always names it as missing. `Outer` is
+/// `Wrap(Inner)`.
 struct UninhabitedMissingOracle;
 
 impl ConstructorOracle<UninhabitedTy, UninhabitedHead> for UninhabitedMissingOracle {
@@ -300,12 +306,16 @@ impl ConstructorOracle<UninhabitedTy, UninhabitedHead> for UninhabitedMissingOra
     fn constructor_space(
         &mut self,
         ty: &UninhabitedTy,
-        _seen: &[UninhabitedHead],
+        seen: &[UninhabitedHead],
     ) -> Result<ConstructorSpace<UninhabitedHead>, Self::Error> {
         Ok(match ty {
             UninhabitedTy::Root => ConstructorSpace::Incomplete {
                 missing: MissingHead::Known(UninhabitedHead::Dead),
             },
+            UninhabitedTy::Outer => ConstructorSpace::from_finite(seen, [UninhabitedHead::Wrap]),
+            UninhabitedTy::Inner => {
+                ConstructorSpace::from_finite(seen, [UninhabitedHead::Dead, UninhabitedHead::Live])
+            }
             UninhabitedTy::Empty => ConstructorSpace::Empty,
         })
     }
@@ -316,9 +326,14 @@ impl ConstructorOracle<UninhabitedTy, UninhabitedHead> for UninhabitedMissingOra
         constructor: &UninhabitedHead,
     ) -> Result<ConstructorFields<UninhabitedTy>, Self::Error> {
         Ok(match (ty, constructor) {
-            (UninhabitedTy::Root, UninhabitedHead::Live) => ConstructorFields::Fields(Vec::new()),
-            (UninhabitedTy::Root, UninhabitedHead::Dead) => {
+            (UninhabitedTy::Root | UninhabitedTy::Inner, UninhabitedHead::Live) => {
+                ConstructorFields::Fields(Vec::new())
+            }
+            (UninhabitedTy::Root | UninhabitedTy::Inner, UninhabitedHead::Dead) => {
                 ConstructorFields::Fields(vec![UninhabitedTy::Empty])
+            }
+            (UninhabitedTy::Outer, UninhabitedHead::Wrap) => {
+                ConstructorFields::Fields(vec![UninhabitedTy::Inner])
             }
             _ => ConstructorFields::Impossible,
         })
@@ -439,5 +454,270 @@ fn an_uninhabited_known_missing_head_is_inconsistent_even_without_observed_heads
     assert_eq!(
         result,
         Usefulness::Inconclusive(InconclusiveReason::InconsistentOracle)
+    );
+}
+
+#[test]
+fn an_uninhabited_head_of_a_field_type_gives_way_to_an_inhabited_one() {
+    let result = usefulness(
+        &mut UninhabitedMissingOracle,
+        &[UninhabitedTy::Outer],
+        &[],
+        &[Pattern::Wildcard],
+    )
+    .unwrap();
+
+    assert_eq!(result, Usefulness::Useful(vec![Witness::Wildcard]));
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NatTy {
+    Nat,
+    Bool,
+    Stream,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NatHead {
+    Succ,
+    Zero,
+    False,
+    True,
+    Cons,
+}
+
+/// `Nat = Succ(Nat) | Zero`, with the recursive head first, and
+/// `Stream = Cons(Stream)`, which the oracle wrongly calls inhabited.
+struct NatOracle;
+
+impl ConstructorOracle<NatTy, NatHead> for NatOracle {
+    type Error = Infallible;
+
+    fn constructor_space(
+        &mut self,
+        ty: &NatTy,
+        seen: &[NatHead],
+    ) -> Result<ConstructorSpace<NatHead>, Self::Error> {
+        Ok(match ty {
+            NatTy::Nat => ConstructorSpace::from_finite(seen, [NatHead::Succ, NatHead::Zero]),
+            NatTy::Bool => ConstructorSpace::from_finite(seen, [NatHead::False, NatHead::True]),
+            NatTy::Stream => ConstructorSpace::from_finite(seen, [NatHead::Cons]),
+        })
+    }
+
+    fn constructor_fields(
+        &mut self,
+        _ty: &NatTy,
+        constructor: &NatHead,
+    ) -> Result<ConstructorFields<NatTy>, Self::Error> {
+        Ok(ConstructorFields::Fields(match constructor {
+            NatHead::Succ => vec![NatTy::Nat],
+            NatHead::Cons => vec![NatTy::Stream],
+            NatHead::Zero | NatHead::False | NatHead::True => Vec::new(),
+        }))
+    }
+}
+
+#[test]
+fn a_recursive_missing_head_named_first_is_shown_inhabited_through_another() {
+    let nat_and_bool = [NatTy::Nat, NatTy::Bool];
+    let missing = |first: Pattern<NatHead>| {
+        analyze(
+            &mut NatOracle,
+            &nat_and_bool,
+            &[Arm::new([first, Pattern::constant(NatHead::False)])],
+        )
+        .unwrap()
+        .exhaustiveness
+    };
+
+    assert_eq!(
+        missing(Pattern::Wildcard),
+        Exhaustiveness::NonExhaustive(vec![
+            Witness::Wildcard,
+            Witness::Constructor {
+                head: NatHead::True,
+                arguments: Vec::new(),
+            },
+        ])
+    );
+    assert_eq!(
+        missing(Pattern::constant(NatHead::Zero)),
+        Exhaustiveness::NonExhaustive(vec![
+            Witness::Constructor {
+                head: NatHead::Succ,
+                arguments: vec![Witness::Wildcard],
+            },
+            Witness::Wildcard,
+        ])
+    );
+}
+
+#[test]
+fn a_missing_head_that_only_recurses_is_inconsistent() {
+    let result = usefulness(&mut NatOracle, &[NatTy::Stream], &[], &[Pattern::Wildcard]).unwrap();
+
+    assert_eq!(
+        result,
+        Usefulness::Inconclusive(InconclusiveReason::InconsistentOracle)
+    );
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AstTy {
+    Expr,
+    Literal,
+    Value,
+    Word,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AstHead {
+    Binary(usize),
+    Lit,
+    Literal,
+    Int,
+}
+
+/// `Expr = Binary0(Expr, Expr) | ... | Lit(Literal)` with the given number of
+/// `Binary` heads, `Literal(Value)`, and `Value = Int(Word)` over open words.
+struct AstOracle(usize);
+
+impl ConstructorOracle<AstTy, AstHead> for AstOracle {
+    type Error = Infallible;
+
+    fn constructor_space(
+        &mut self,
+        ty: &AstTy,
+        seen: &[AstHead],
+    ) -> Result<ConstructorSpace<AstHead>, Self::Error> {
+        Ok(match ty {
+            AstTy::Expr => ConstructorSpace::from_finite(
+                seen,
+                (0..self.0).map(AstHead::Binary).chain([AstHead::Lit]),
+            ),
+            AstTy::Literal => ConstructorSpace::from_finite(seen, [AstHead::Literal]),
+            AstTy::Value => ConstructorSpace::from_finite(seen, [AstHead::Int]),
+            AstTy::Word => ConstructorSpace::open(),
+        })
+    }
+
+    fn constructor_fields(
+        &mut self,
+        _ty: &AstTy,
+        constructor: &AstHead,
+    ) -> Result<ConstructorFields<AstTy>, Self::Error> {
+        Ok(ConstructorFields::Fields(match constructor {
+            AstHead::Binary(_) => vec![AstTy::Expr, AstTy::Expr],
+            AstHead::Lit => vec![AstTy::Literal],
+            AstHead::Literal => vec![AstTy::Value],
+            AstHead::Int => vec![AstTy::Word],
+        }))
+    }
+}
+
+#[test]
+fn a_leaf_head_named_after_many_recursive_ones_takes_a_step_per_head() {
+    // Each `Expr` field of the missing `Binary0` takes a step for each of the
+    // 64 `Binary` heads, then finds `Lit(Literal(Int(_)))`.
+    let result = usefulness_with_config(
+        &mut AstOracle(64),
+        &[AstTy::Expr],
+        &[vec![Pattern::constructor(
+            AstHead::Lit,
+            [Pattern::Wildcard],
+        )]],
+        &[Pattern::Wildcard],
+        Config {
+            max_steps: 256,
+            ..Config::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        result,
+        Usefulness::Useful(vec![Witness::Constructor {
+            head: AstHead::Binary(0),
+            arguments: vec![Witness::Wildcard, Witness::Wildcard],
+        }])
+    );
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum EndlessTy {
+    Wide,
+    Deep(usize),
+}
+
+/// `Wide` has a head for every number, each with a `Wide` field, and `Deep(n)`
+/// has one head, with a `Deep(n + 1)` field. The oracle wrongly calls both
+/// inhabited.
+struct EndlessOracle;
+
+impl ConstructorOracle<EndlessTy, usize> for EndlessOracle {
+    type Error = Infallible;
+
+    fn constructor_space(
+        &mut self,
+        ty: &EndlessTy,
+        seen: &[usize],
+    ) -> Result<ConstructorSpace<usize>, Self::Error> {
+        Ok(match ty {
+            EndlessTy::Wide => ConstructorSpace::Incomplete {
+                missing: MissingHead::Known(seen.len()),
+            },
+            EndlessTy::Deep(_) => ConstructorSpace::from_finite(seen, [0]),
+        })
+    }
+
+    fn constructor_fields(
+        &mut self,
+        ty: &EndlessTy,
+        _constructor: &usize,
+    ) -> Result<ConstructorFields<EndlessTy>, Self::Error> {
+        Ok(ConstructorFields::Fields(vec![match ty {
+            EndlessTy::Wide => EndlessTy::Wide,
+            EndlessTy::Deep(level) => EndlessTy::Deep(level + 1),
+        }]))
+    }
+}
+
+#[test]
+fn missing_heads_without_end_run_out_of_steps() {
+    let config = Config {
+        max_steps: 64,
+        ..Config::default()
+    };
+    let result = usefulness_with_config(
+        &mut EndlessOracle,
+        &[EndlessTy::Wide],
+        &[],
+        &[Pattern::Wildcard],
+        config,
+    )
+    .unwrap();
+
+    assert_eq!(
+        result,
+        Usefulness::Inconclusive(InconclusiveReason::StepLimitExceeded { max_steps: 64 })
+    );
+}
+
+#[test]
+fn field_types_that_never_repeat_run_out_of_depth() {
+    let result = usefulness(
+        &mut EndlessOracle,
+        &[EndlessTy::Deep(0)],
+        &[],
+        &[Pattern::Wildcard],
+    )
+    .unwrap();
+
+    assert_eq!(
+        result,
+        Usefulness::Inconclusive(InconclusiveReason::DepthLimitExceeded {
+            max_depth: Config::default().max_depth,
+        })
     );
 }

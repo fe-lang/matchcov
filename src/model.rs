@@ -166,7 +166,9 @@ impl<T> From<Vec<T>> for ConstructorFields<T> {
 /// Methods take `&mut self` so an adapter may normalize inference variables,
 /// instantiate generic constructor schemes, or cache database queries. Answers
 /// must remain semantically stable within one analysis; mutation must not make
-/// the same type/head pair contradict an earlier answer.
+/// the same type/head pair contradict an earlier answer. Types that compare
+/// equal must have the same constructors and fields: the check that a missing
+/// head has a value relies on it to end on recursive types.
 pub trait ConstructorOracle<T, C> {
     /// A language-specific lookup or inference failure.
     type Error;
