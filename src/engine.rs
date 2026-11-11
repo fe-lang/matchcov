@@ -482,16 +482,18 @@ fn specialize_head<C, E>(
 where
     C: Clone + Eq,
 {
-    let mut emit = |mut row: Vec<Pattern<C>>| {
+    let replacements =
+        specialize_alternatives(pattern, constructor, field_count).map_err(|mismatch| {
+            InconclusiveReason::ArityMismatch {
+                expected: mismatch.expected,
+                actual: mismatch.actual,
+            }
+        })?;
+    output.extend(replacements.into_iter().map(|mut row| {
         row.extend_from_slice(rest);
-        output.push(row);
-    };
-    specialize_pattern(pattern, constructor, field_count, &mut emit).map_err(|mismatch| {
-        InconclusiveReason::ArityMismatch {
-            expected: mismatch.expected,
-            actual: mismatch.actual,
-        }
-    })
+        row
+    }));
+    Ok(())
 }
 
 fn default_matrix<C: Clone>(matrix: &[Vec<Pattern<C>>]) -> Vec<Vec<Pattern<C>>> {
@@ -500,17 +502,11 @@ fn default_matrix<C: Clone>(matrix: &[Vec<Pattern<C>>]) -> Vec<Vec<Pattern<C>>> 
         let (head, rest) = row
             .split_first()
             .expect("defaulting is only called for a non-empty matrix width");
-        default_head(head, rest, &mut result);
+        if matches_anything(head) {
+            result.push(rest.to_vec());
+        }
     }
     result
-}
-
-fn default_head<C: Clone>(
-    pattern: &Pattern<C>,
-    rest: &[Pattern<C>],
-    output: &mut Vec<Vec<Pattern<C>>>,
-) {
-    expand_default_pattern(pattern, &mut || output.push(rest.to_vec()));
 }
 
 fn root_constructors<C: Clone + Eq>(matrix: &[Vec<Pattern<C>>]) -> Vec<C> {
@@ -567,18 +563,17 @@ pub(crate) struct ArityMismatch {
     pub(crate) actual: usize,
 }
 
-pub(crate) fn specialize_pattern<C, F>(
+fn specialize_pattern<C>(
     pattern: &Pattern<C>,
     constructor: &C,
     field_count: usize,
-    emit: &mut F,
+    output: &mut Vec<Vec<Pattern<C>>>,
 ) -> Result<(), ArityMismatch>
 where
     C: Clone + Eq,
-    F: FnMut(Vec<Pattern<C>>),
 {
     match pattern {
-        Pattern::Wildcard => emit(vec![Pattern::Wildcard; field_count]),
+        Pattern::Wildcard => output.push(vec![Pattern::Wildcard; field_count]),
         Pattern::Constructor { head, arguments } if head == constructor => {
             if arguments.len() != field_count {
                 return Err(ArityMismatch {
@@ -586,30 +581,51 @@ where
                     actual: arguments.len(),
                 });
             }
-            emit(arguments.clone());
+            output.push(arguments.clone());
         }
         Pattern::Constructor { .. } => {}
         Pattern::Or(alternatives) => {
             for alternative in alternatives {
-                specialize_pattern(alternative, constructor, field_count, emit)?;
+                specialize_pattern(alternative, constructor, field_count, output)?;
             }
         }
     }
     Ok(())
 }
 
-pub(crate) fn expand_default_pattern<C, F>(pattern: &Pattern<C>, emit: &mut F)
+/// The field patterns that specializing `pattern` for `constructor` gives, one
+/// list per alternative that `constructor` can match, in order. When one of
+/// them matches anything, they all give one list of wildcards: it matches what
+/// every one of them does, and each would double the rows of every matrix
+/// below.
+pub(crate) fn specialize_alternatives<C>(
+    pattern: &Pattern<C>,
+    constructor: &C,
+    field_count: usize,
+) -> Result<Vec<Vec<Pattern<C>>>, ArityMismatch>
 where
-    F: FnMut(),
+    C: Clone + Eq,
 {
+    let mut replacements = Vec::new();
+    specialize_pattern(pattern, constructor, field_count, &mut replacements)?;
+    if replacements
+        .iter()
+        .any(|fields| fields.iter().all(matches_anything))
+    {
+        replacements = vec![vec![Pattern::Wildcard; field_count]];
+    }
+    Ok(replacements)
+}
+
+/// Whether `pattern` matches every value whatever the constructors of its
+/// type: whether it is a wildcard or has one among its alternatives, at any
+/// depth. Such a row is kept once in a default matrix, however many such
+/// alternatives it has.
+pub(crate) fn matches_anything<C>(pattern: &Pattern<C>) -> bool {
     match pattern {
-        Pattern::Wildcard => emit(),
-        Pattern::Constructor { .. } => {}
-        Pattern::Or(alternatives) => {
-            for alternative in alternatives {
-                expand_default_pattern(alternative, emit);
-            }
-        }
+        Pattern::Wildcard => true,
+        Pattern::Constructor { .. } => false,
+        Pattern::Or(alternatives) => alternatives.iter().any(matches_anything),
     }
 }
 
